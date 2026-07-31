@@ -1,0 +1,23 @@
+# Copy this file to terraform.tfvars and fill in your values
+# terraform.tfvars is gitignored — never commit it
+
+project    = "grid-iot-rl"
+env        = "dev"
+aws_region = "us-east-1"
+
+# your email for alerts
+alert_email = "you@example.com"
+
+# shared secret between edge devices and Lambda
+# generate with: python -c "import secrets; print(secrets.token_hex(32))"
+hmac_secret = "replace-with-output-of-the-command-above"
+
+# devices to provision (terraform creates Things + certs for each)
+devices = [
+  "edge-device-001",
+  "edge-device-002",
+  "edge-device-003"
+]
+
+# SageMaker endpoint name (deploy via notebook separately)
+sagemaker_endpoint = "grid-voltage-rl-v1"

@@ -1,0 +1,31 @@
+# secrets and certificates — never commit
+certs/
+*.pem
+*.key
+*.crt
+infrastructure/terraform.tfvars
+infrastructure/.terraform/
+infrastructure/terraform.tfstate
+infrastructure/terraform.tfstate.backup
+infrastructure/lambda/build/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# colab uploads
+edge_simulator/colab/certs/edge-device-001/*.pem
+edge_simulator/colab/certs/edge-device-001/*.key
+edge_simulator/colab/certs/edge-device-002/*.pem
+edge_simulator/colab/certs/edge-device-002/*.key
+edge_simulator/colab/certs/edge-device-003/*.pem
+edge_simulator/colab/certs/edge-device-003/*.key
+edge_simulator/colab/certs/root-CA.crt
+
+# local
+.env
+.DS_Store
+latest_prediction.json
+training_data.json
