@@ -38,6 +38,7 @@ resource "aws_cloudwatch_dashboard" "main" {
         height = 6
         properties = {
           title   = "Lambda invocations"
+          region  = var.region
           period  = 60
           stat    = "Sum"
           metrics = [["AWS/Lambda", "Invocations", "FunctionName", var.lambda_function_name]]
@@ -49,6 +50,7 @@ resource "aws_cloudwatch_dashboard" "main" {
         height = 6
         properties = {
           title   = "Lambda errors"
+          region  = var.region
           period  = 60
           stat    = "Sum"
           metrics = [["AWS/Lambda", "Errors", "FunctionName", var.lambda_function_name]]

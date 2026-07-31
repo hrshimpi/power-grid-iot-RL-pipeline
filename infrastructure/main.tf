@@ -227,6 +227,7 @@ resource "aws_lambda_permission" "iot" {
 module "monitoring" {
   source               = "./modules/monitoring"
   prefix               = local.prefix
+  region               = var.aws_region
   lambda_function_name = module.lambda.function_name
   sns_topic_arn        = module.alerting.topic_arn
 }
