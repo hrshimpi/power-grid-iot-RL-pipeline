@@ -147,6 +147,19 @@ open rl_model/grid_voltage_notebook.ipynb
 # endpoint: grid-voltage-rl-v1
 ```
 
+The notebook derives the S3 bucket, SageMaker execution role, and endpoint name from the
+same `project`/`env` prefix Terraform uses (`grid-iot-rl-dev-*` by default), so they can't
+drift out of sync with what `terraform apply` created. If your `terraform.tfvars` uses
+non-default `project`/`env` values, override before running the notebook:
+
+```bash
+export GRID_PROJECT="grid-iot-rl"     # must match terraform.tfvars: project
+export GRID_ENV="dev"                 # must match terraform.tfvars: env
+export AWS_REGION="us-east-1"
+# S3_BUCKET, SAGEMAKER_ENDPOINT, SAGEMAKER_ROLE_ARN, AWS_ACCOUNT_ID can each be
+# overridden individually too — see Cell 8b in the notebook
+```
+
 ### Step 5 — Run edge simulator
 
 **Option A — local laptop:**
