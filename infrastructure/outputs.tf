@@ -23,6 +23,11 @@ output "hmac_secret_arn" {
   value       = module.secrets.hmac_secret_arn
 }
 
+output "sagemaker_execution_role_arn" {
+  description = "IAM role ARN to pass as ExecutionRoleArn when deploying the SageMaker model from the notebook"
+  value       = module.iam.sagemaker_role_arn
+}
+
 output "vpc_id" {
   description = "VPC ID"
   value       = aws_vpc.main.id
