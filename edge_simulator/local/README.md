@@ -19,11 +19,12 @@ cp .env.example .env
 `.env` holds the account-specific config that shouldn't be hardcoded in source:
 
 ```bash
-# from: terraform output iot_endpoint  (infrastructure/)
+# required — from: terraform output iot_endpoint  (infrastructure/)
 IOT_ENDPOINT=xxxxxxxxxxxxxx-ats.iot.us-east-1.amazonaws.com
 
-# must match infrastructure/terraform.tfvars: hmac_secret
-HMAC_SECRET=your-hmac-secret
+# optional — must match infrastructure/terraform.tfvars: hmac_secret
+# leave empty to send unsigned payloads (you'll get a startup warning as a reminder)
+HMAC_SECRET=
 ```
 
 `.env` is gitignored — it never gets committed. Cert/key paths and topic already have

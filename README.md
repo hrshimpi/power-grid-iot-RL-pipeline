@@ -47,10 +47,11 @@ grid-iot-rl/
 │   │       └── lambda_function.py   ← deployed by Terraform
 │   └── modules/
 │       ├── iot/             ← Things + certs + policy
-│       ├── lambda/          ← function + IAM + VPC
+│       ├── lambda/          ← function + VPC config
+│       ├── iam/             ← all IAM roles (Lambda, SageMaker, IoT rule)
 │       ├── storage/         ← S3 bucket
 │       ├── alerting/        ← SNS topic
-│       ├── monitoring/      ← CloudWatch alarms
+│       ├── monitoring/      ← CloudWatch alarms + dashboard
 │       └── secrets/         ← Secrets Manager
 │
 ├── edge_simulator/
@@ -81,9 +82,7 @@ grid-iot-rl/
 │   └── edge-device-003/
 │
 └── docs/
-    ├── architecture.md
-    ├── test_scenarios.md
-    └── security_controls.md
+    └── test_scenarios.md
 ```
 
 ---
