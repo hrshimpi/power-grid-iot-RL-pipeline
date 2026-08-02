@@ -110,6 +110,17 @@ resource "aws_security_group" "lambda" {
     description = "HTTPS to AWS APIs"
   }
 
+  # this SG is also attached to the S3/Secrets Manager VPC endpoints' ENIs —
+  # without this, Lambda's TCP handshake to those endpoints never completes
+  # and every invocation hangs until it times out
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    self        = true
+    description = "HTTPS from Lambda to VPC interface endpoints (self-referencing)"
+  }
+
   tags = { Name = "${local.prefix}-lambda-sg" }
 }
 
