@@ -167,12 +167,12 @@ export AWS_REGION="us-east-1"
 cd edge_simulator/local
 pip install -r requirements.txt
 
-# set IoT endpoint (from terraform output)
-export IOT_ENDPOINT="xxx-ats.iot.us-east-1.amazonaws.com"
-export IOT_CLIENT_ID="edge-device-001"
-export HMAC_SECRET="your-hmac-secret"
+# configure once — copy the template and fill in IOT_ENDPOINT / HMAC_SECRET
+cp .env.example .env
 
-python publish_to_iot.py --count 10 --mode happy
+# --client-id picks which provisioned device you're publishing as
+# (edge-device-001 / 002 / 003) — a per-run flag, not part of .env
+python publish_to_iot.py --client-id edge-device-001 --count 10 --mode happy
 ```
 
 **Option B — Google Colab (3 devices simultaneously):**

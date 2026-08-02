@@ -51,16 +51,24 @@ except ImportError:
     log.info("Modules folder not found — running in standalone mode")
 
 # ── defaults ──────────────────────────────────────────────────
+# IOT_CERT / IOT_KEY use a {device_id} placeholder resolved after argparse,
+# same as IOT_TOPIC — matches the certs/<device_id>/... layout that Terraform
+# generates and that gets copied into edge_simulator/colab/certs/.
 DEFAULT_ENDPOINT  = os.environ.get("IOT_ENDPOINT",  "YOUR-ENDPOINT-ats.iot.us-east-1.amazonaws.com")
-DEFAULT_CERT      = os.environ.get("IOT_CERT",      "./keys/device-cert.pem")
-DEFAULT_KEY       = os.environ.get("IOT_KEY",       "./keys/private.key")
-DEFAULT_ROOT_CA   = os.environ.get("IOT_ROOT_CA",   "./keys/root-CA.crt")
-DEFAULT_CLIENT_ID = os.environ.get("IOT_CLIENT_ID", "hitachi-substation-01")
+DEFAULT_CERT      = os.environ.get("IOT_CERT",      "./certs/{device_id}/cert.pem")
+DEFAULT_KEY       = os.environ.get("IOT_KEY",       "./certs/{device_id}/private.key")
+DEFAULT_ROOT_CA   = os.environ.get("IOT_ROOT_CA",   "./certs/root-CA.crt")
+DEFAULT_CLIENT_ID = os.environ.get("IOT_CLIENT_ID", "edge-device-001")
 DEFAULT_TOPIC     = os.environ.get("IOT_TOPIC",     "grid/{device_id}/telemetry")
 HMAC_SECRET       = os.environ.get("HMAC_SECRET",   "").encode()
 
-running         = True
-sequence_number = 0
+running = True
+# seeded from epoch ms, not 0 — Lambda's replay check remembers the last seq it
+# saw per device for as long as its container stays warm, so restarting this
+# script and counting from 1 again would get rejected as a replay. Real time
+# only moves forward, so this is always higher than whatever a previous run
+# (or a still-warm container) last saw.
+sequence_number = int(time.time() * 1000)
 
 
 # ── security: HMAC signing (only if HMAC_SECRET is set) ───────
@@ -288,12 +296,17 @@ def main():
 
     args = parser.parse_args()
 
-    topic = args.topic.replace("{device_id}", args.client_id)
+    topic     = args.topic.replace("{device_id}", args.client_id)
+    args.cert = args.cert.replace("{device_id}", args.client_id)
+    args.key  = args.key.replace("{device_id}", args.client_id)
 
     for path, name in [(args.cert,"cert"),(args.key,"key"),(args.root_ca,"root CA")]:
         if not os.path.isfile(path):
             print(f"ERROR: {name} not found: {path}")
             sys.exit(1)
+
+    if not HMAC_SECRET:
+        log.warning("HMAC_SECRET not set — payloads will be sent unsigned")
 
     def sig_handler(sig, frame):
         global running
