@@ -4,6 +4,11 @@ End-to-end IoT MLOps pipeline: edge sensors → AWS cloud → DQN RL agent → r
 
 ## Architecture
 
+![Architecture diagram](docs/architecture-diagram.png)
+
+*Simplified view — the detailed flow below also includes the IoT Rule trigger,
+the Device Shadow return path, and Secrets Manager/CloudWatch, omitted above for clarity.*
+
 ```
 Edge Device (sensor readings every second)
        │ MQTT over TLS 1.2 (mTLS + HMAC-SHA256)
@@ -82,7 +87,9 @@ grid-iot-rl/
 │   └── edge-device-003/
 │
 └── docs/
-    └── test_scenarios.md
+    ├── test_scenarios.md
+    ├── architecture-diagram.png
+    └── Grid_IoT_RL_Presentation.pptx
 ```
 
 ---
