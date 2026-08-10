@@ -1,4 +1,4 @@
-# Grid IoT RL — Power Grid Voltage Control with Reinforcement Learning
+# Grid IoT RL - Power Grid Voltage Control with Reinforcement Learning
 
 End-to-end IoT MLOps pipeline: edge sensors → AWS cloud → DQN RL agent → real-time decisions.
 
@@ -6,7 +6,7 @@ End-to-end IoT MLOps pipeline: edge sensors → AWS cloud → DQN RL agent → r
 
 ![Architecture diagram](docs/architecture-diagram.png)
 
-*Simplified view — the detailed flow below also includes the IoT Rule trigger,
+*Simplified view - the detailed flow below also includes the IoT Rule trigger,
 the Device Shadow return path, and Secrets Manager/CloudWatch, omitted above for clarity.*
 
 ```
@@ -29,7 +29,7 @@ AWS Lambda (VPC private subnet)
 | Service | Role |
 |---|---|
 | IoT Core | receive MQTT, route to Lambda |
-| Lambda | orchestrate — runs in VPC private subnet |
+| Lambda | orchestrate - runs in VPC private subnet |
 | SageMaker | DQN RL inference endpoint |
 | S3 | permanent data lake |
 | SNS | alert emails |
@@ -41,7 +41,7 @@ AWS Lambda (VPC private subnet)
 
 ```
 grid-iot-rl/
-├── infrastructure/          ← Terraform — deploy AWS once
+├── infrastructure/          ← Terraform - deploy AWS once
 │   ├── main.tf              ← VPC + all modules
 │   ├── variables.tf
 │   ├── outputs.tf
@@ -94,29 +94,65 @@ grid-iot-rl/
 
 ---
 
-## Setup — 5 steps
+## Setup - 5 steps
 
-### Step 1 — Prerequisites
+### Step 1 - Prerequisites
+
+**What you need on your machine:**
+
+| Requirement | Why |
+|---|---|
+| An AWS account with a payment method on file | this deploys real, billed resources — see *Cost* below |
+| An IAM Access Key ID + Secret Access Key | for a user/role that can create VPC, IoT, Lambda, IAM, S3, SNS, SageMaker, Secrets Manager, and CloudWatch resources. `AdministratorAccess` is the simplest path for trying this out; scope it down for anything beyond evaluation |
+| [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.5.0 | provisions all AWS infrastructure |
+| [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) | used by Terraform and by the verification commands later in this doc |
+| Python 3.11+ | generates the HMAC secret, runs the RL notebook, runs the edge simulator |
+| Git | to clone this repo |
 
 ```bash
+git clone https://github.com/hrshimpi/power-grid-iot-RL-pipeline.git
+cd power-grid-iot-RL-pipeline
+
 # install terraform
 brew install terraform        # mac
 # or: https://developer.hashicorp.com/terraform/install
 
 # install AWS CLI and configure
 aws configure
-# enter: Access Key, Secret Key, region (us-east-1), json
+# enter: Access Key, Secret Key, region (us-east-1 -- see Region note below), json
 ```
 
-### Step 2 — Deploy AWS infrastructure
+**Region:** this project is built and tested against `us-east-1`. The RL notebook pulls a
+prebuilt PyTorch container image from AWS's own SageMaker registry, and that registry's
+account ID differs per region (`763104351884` for `us-east-1`) — currently hardcoded in
+`infrastructure/modules/iam/main.tf` and in the notebook's `IMAGE` variable. Deploying to a
+different region means finding [the correct registry account for that region](https://docs.aws.amazon.com/sagemaker/latest/dg/notebooks-available-images.html)
+and updating both places; sticking with `us-east-1` avoids that entirely.
+
+**Cost:** this isn't free-tier-only. Roughly: NAT Gateway ~$0.045/hr + data processing,
+SageMaker endpoint ~$0.065/hr while it's deployed. Everything else (Lambda, IoT Core, S3,
+SNS, Secrets Manager, CloudWatch) is negligible at this scale. Delete the SageMaker
+endpoint and run `terraform destroy` when you're done — see *Clean up* below.
+
+**Deploying under your own AWS account:** the code has no hardcoded account IDs or
+personal values — it's designed to be cloned and deployed fresh by anyone. The one thing
+that can collide: S3 bucket names are unique *globally*, not just within your account. If
+`terraform apply` fails with a bucket-name-already-exists error, change `project` or `env`
+in `terraform.tfvars` to get a different bucket name and re-apply.
+
+### Step 2 - Deploy AWS infrastructure
 
 ```bash
 cd infrastructure
 
 # configure
 cp terraform.tfvars.example terraform.tfvars
+
+# generate the shared HMAC secret (edge devices <-> Lambda payload signing)
+python -c "import secrets; print(secrets.token_hex(32))"
+
 nano terraform.tfvars
-# set: alert_email, hmac_secret, aws_region
+# set: alert_email, hmac_secret (paste the value generated above), aws_region
 
 # deploy (creates VPC, IoT, Lambda, S3, SNS, Secrets Manager, certs)
 terraform init
@@ -134,7 +170,7 @@ lambda_function = "grid-iot-rl-dev-inference"
 
 Cert files are auto-generated in `certs/` folder.
 
-### Step 3 — Copy certs to edge simulators
+### Step 3 - Copy certs to edge simulators
 
 ```bash
 # for local run
@@ -144,12 +180,12 @@ cp -r certs/* edge_simulator/local/certs/
 cp -r certs/* edge_simulator/colab/certs/
 ```
 
-### Step 4 — Train and deploy RL model
+### Step 4 - Train and deploy RL model
 
 ```bash
 # open in Jupyter or SageMaker Studio
 open rl_model/grid_voltage_notebook.ipynb
-# run all cells — takes ~15 minutes
+# run all cells - takes ~15 minutes
 # endpoint: grid-voltage-rl-v1
 ```
 
@@ -163,25 +199,25 @@ export GRID_PROJECT="grid-iot-rl"     # must match terraform.tfvars: project
 export GRID_ENV="dev"                 # must match terraform.tfvars: env
 export AWS_REGION="us-east-1"
 # S3_BUCKET, SAGEMAKER_ENDPOINT, SAGEMAKER_ROLE_ARN, AWS_ACCOUNT_ID can each be
-# overridden individually too — see Cell 8b in the notebook
+# overridden individually too - see Cell 8b in the notebook
 ```
 
-### Step 5 — Run edge simulator
+### Step 5 - Run edge simulator
 
-**Option A — local laptop:**
+**Option A - local laptop:**
 ```bash
 cd edge_simulator/local
 pip install -r requirements.txt
 
-# configure once — copy the template and fill in IOT_ENDPOINT / HMAC_SECRET
+# configure once - copy the template and fill in IOT_ENDPOINT / HMAC_SECRET
 cp .env.example .env
 
 # --client-id picks which provisioned device you're publishing as
-# (edge-device-001 / 002 / 003) — a per-run flag, not part of .env
+# (edge-device-001 / 002 / 003) - a per-run flag, not part of .env
 python publish_to_iot.py --client-id edge-device-001 --count 10 --mode happy
 ```
 
-**Option B — Google Colab (3 devices simultaneously):**
+**Option B - Google Colab (3 devices simultaneously):**
 1. Copy certs into `edge_simulator/colab/certs/` subfolders
 2. Upload `edge_simulator/colab/` folder to Google Drive
 3. Open `multi_device_simulator.ipynb` in Colab
