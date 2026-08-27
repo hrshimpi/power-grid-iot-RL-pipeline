@@ -24,6 +24,215 @@ AWS Lambda (VPC private subnet)
        └── SNS → alert if fault detected
 ```
 
+## Data journey — what the payload actually looks like
+
+The diagrams above show *services*. This section traces one actual reading through every
+transformation it goes through, byte by byte — pulled directly from the code
+(`data_generator.py`, `publish_to_iot.py`, `lambda_function.py`, the notebook's
+`inference.py`), not a simplified summary. One scenario runs through the whole thing so the
+before/after at each stage is directly comparable: device `edge-device-002` reports a
+**voltage sag**, and the agent responds with `switch_backup`.
+
+```
+ 1  EDGE DEVICE — raw reading                                     7 fields
+    generator produces one simulated sensor sample
+        │
+        │  sign_payload() stamps a sequence number + nonce, then HMAC-SHA256s the result
+        ▼
+ 2  EDGE DEVICE — signed for transmission                         +3 fields → 10 total
+        │
+        │  published over MQTT/TLS 1.2 to grid/{device_id}/telemetry — bytes unchanged
+        ▼
+ 3  AWS IoT CORE — MQTT ingest                                    0 change, still 10 fields
+        │
+        │  IoT Rule "SELECT * FROM 'grid/+/telemetry'" forwards the message verbatim
+        ▼
+ 4  LAMBDA — event                                                0 change — this *is* stage 2's JSON
+        │
+        │  verify_signature() / check_replay() / validate_inputs() — read-only security
+        │  gates; nothing added or removed, only pass/reject
+        ▼
+ 5  LAMBDA → SAGEMAKER — narrowed request              10 → 5 fields, security metadata stripped
+        │
+        │  inference.py: input_fn() scales the 5 floats with the trained MinMaxScaler,
+        │  predict_fn() runs the DQN forward pass, output_fn() returns the decision
+        ▼
+ 6  SAGEMAKER — response                                    a new, separate object — 4 fields
+        │
+        │  Lambda merges: original event + this response + its own derived fields
+        ▼
+ 7  LAMBDA — enriched record                                        10 + 8 = 18 fields
+        │
+        ├──▶  S3 — written verbatim as readings/year=.../month=.../day=.../{device_id}_{ts}.json
+        │
+        │  Lambda then picks a DIFFERENT, smaller subset for the shadow — drops
+        │  seq/nonce/signature/q_values, adds status + a pointer back to the S3 object
+        ▼
+ 8  DEVICE SHADOW — reported state                14 fields — not the same 18 that went to S3
+        │
+        │  AWS IoT wraps this in its own shadow envelope and publishes to
+        │  $aws/things/{device_id}/shadow/update/accepted
+        ▼
+ 9  EDGE DEVICE — shadow delta received
+    on_shadow_delta() unwraps state.reported and prints/saves the decision
+```
+
+### 1 — Raw reading (`data_generator.py`)
+
+```json
+{
+  "device_id": "edge-device-002",
+  "timestamp": "2026-08-10T14:32:07Z",
+  "voltage_v": 362.4,
+  "current_a": 78.6,
+  "frequency_hz": 49.98,
+  "temperature_c": 41.2,
+  "power_factor": 0.947
+}
+```
+Voltage is already outside the 400–430V normal band — this is what a real sag looks like
+before anything downstream has decided that yet.
+
+### 2 — Signed for transmission (`publish_to_iot.py: sign_payload()`)
+
+```json
+{
+  "device_id": "edge-device-002",
+  "timestamp": "2026-08-10T14:32:07Z",
+  "voltage_v": 362.4,
+  "current_a": 78.6,
+  "frequency_hz": 49.98,
+  "temperature_c": 41.2,
+  "power_factor": 0.947,
+  "seq": 1755008527914,
+  "nonce": "3f2a9d7c-88b1-4e2a-9c31-7a5e0b6d4f10",
+  "signature": "7c2f9a1e4b6d8035f1a9c7e2b4d6f8031c9e7a5b3d1f9c7e5a3b1d9f7c5e3a1b"
+}
+```
+**Changed:** +3 fields. `seq` and `nonce` exist purely so this exact message can never be
+replayed; `signature` is the HMAC-SHA256 of every other field (sorted, so both sides compute
+it identically) — this is the object that actually crosses the network.
+
+### 3 — AWS IoT Core (MQTT ingest)
+
+No JSON block — this stage doesn't touch the payload at all. The IoT Rule
+(`SELECT * FROM 'grid/+/telemetry'`) just matches the topic and forwards the message
+verbatim to Lambda. Byte-identical to stage 2.
+
+### 4 — Lambda's `event` (`lambda_function.py: lambda_handler()`)
+
+Also byte-identical to stage 2 — this is literally what IoT Core handed Lambda, with no
+transformation yet. `verify_signature()`, `check_replay()`, and `validate_inputs()` all run
+against this object next; they read it and pass/reject, but add or remove nothing.
+
+### 5 — Narrowed for SageMaker (`lambda_function.py: invoke_sagemaker()`)
+
+```json
+{
+  "voltage_v": 362.4,
+  "current_a": 78.6,
+  "frequency_hz": 49.98,
+  "temperature_c": 41.2,
+  "power_factor": 0.947
+}
+```
+**Changed:** 10 fields → 5. `device_id`, `timestamp`, `seq`, `nonce`, `signature` are all
+security/routing metadata the model has no use for — SageMaker only ever sees the 5 numbers
+it was trained on.
+
+### 6 — SageMaker's response (`inference.py: predict_fn()`)
+
+```json
+{
+  "action": 2,
+  "action_name": "switch_backup",
+  "confidence": 0.9421,
+  "q_values": [-1.82, 0.34, 3.71, 1.02, -0.55]
+}
+```
+**Changed:** an entirely new object — nothing from the request is echoed back. Internally,
+`input_fn()` first normalizes the 5 raw floats with the same `MinMaxScaler` values the
+notebook fit during training, before the DQN ever sees them.
+
+### 7 — Enriched record (`lambda_function.py`, written to S3)
+
+```json
+{
+  "device_id": "edge-device-002",
+  "timestamp": "2026-08-10T14:32:07Z",
+  "voltage_v": 362.4,
+  "current_a": 78.6,
+  "frequency_hz": 49.98,
+  "temperature_c": 41.2,
+  "power_factor": 0.947,
+  "seq": 1755008527914,
+  "nonce": "3f2a9d7c-88b1-4e2a-9c31-7a5e0b6d4f10",
+  "signature": "7c2f9a1e4b6d8035f1a9c7e2b4d6f8031c9e7a5b3d1f9c7e5a3b1d9f7c5e3a1b",
+  "fault_type": "voltage_sag",
+  "action": 2,
+  "action_name": "switch_backup",
+  "confidence": 0.9421,
+  "q_values": "[-1.82, 0.34, 3.71, 1.02, -0.55]",
+  "signature_valid": true,
+  "replay_check": "passed",
+  "processed_at": "2026-08-10T14:32:08.114562+00:00"
+}
+```
+**Changed:** stage 2's 10 fields, spread as-is, plus 8 new ones — the original signed
+payload merged with SageMaker's decision, Lambda's own fault classification, and an audit
+trail (`signature_valid`, `replay_check`, `processed_at`). One easy-to-miss detail:
+`q_values` is `json.dumps()`'d into a **string**, not kept as a nested array — worth knowing
+if you ever query this data with Athena. This exact object is the S3 object body, at
+`readings/year=2026/month=08/day=10/edge-device-002_1755008528114.json`.
+
+### 8 — Device Shadow update (`lambda_function.py: update_thing_shadow()`)
+
+```json
+{
+  "voltage_v": 362.4,
+  "current_a": 78.6,
+  "frequency_hz": 49.98,
+  "temperature_c": 41.2,
+  "power_factor": 0.947,
+  "fault_type": "voltage_sag",
+  "action": 2,
+  "action_name": "switch_backup",
+  "confidence": 0.9421,
+  "signature_valid": true,
+  "replay_check": "passed",
+  "status": "processed",
+  "processed_at": "2026-08-10T14:32:08.114562+00:00",
+  "last_s3_object": "readings/year=2026/month=08/day=10/edge-device-002_1755008528114.json"
+}
+```
+**Changed:** this is *not* the same 18-field record that went to S3 — Lambda builds a
+separate, smaller object for the shadow. `seq`/`nonce`/`signature` (no longer needed once
+verified) and `q_values` (too noisy for a "latest status" doc) are dropped;
+`last_s3_object` is added as a pointer back to the full audit record.
+
+### 9 — What the edge device actually receives
+
+AWS IoT wraps stage 8 in its own shadow envelope before publishing to
+`$aws/things/edge-device-002/shadow/update/accepted`, which the edge device is already
+subscribed to:
+
+```json
+{
+  "state": {
+    "reported": { "...": "the 14-field object from stage 8" }
+  },
+  "metadata": {
+    "reported": { "voltage_v": { "timestamp": 1755008528 }, "...": "..." }
+  },
+  "version": 47,
+  "timestamp": 1755008528
+}
+```
+`on_shadow_delta()` in `publish_to_iot.py` unwraps `state.reported`, prints the
+`RECEIVED FROM CLOUD` block (`action`, `action_name`, `confidence`, and the echoed sensor
+values), and writes it to `latest_prediction.json` — closing the loop from a single sensor
+reading to a decision back at the edge, in under a second.
+
 ## Services used
 
 | Service | Role |
@@ -249,6 +458,52 @@ python publish_to_iot.py --count 5 --mode attack
 # chaos
 python publish_to_iot.py --count 20 --mode chaos --fault-rate 0.2
 ```
+
+---
+
+## Generating the demo chart
+
+`rl_model/grid_voltage_notebook.ipynb` includes a cell that plots one full voltage timeline
+— normal operation, a fault, and the RL agent's recovery — from `demo_sag.json`. That file
+is real, recorded pipeline output, not synthetic data: three separate
+`publish_to_iot.py --save` runs, captured in order and merged into one file, so the chart is
+literally three genuine round trips through the live pipeline stitched together.
+
+```bash
+cd edge_simulator/local
+
+# 20 normal readings
+python publish_to_iot.py --count 20 --mode happy --save part1_normal.json
+
+# 20 voltage sag readings
+python publish_to_iot.py --count 20 --inject voltage_sag --inject-duration 20 --save part2_fault.json
+
+# 20 normal readings again
+python publish_to_iot.py --count 20 --mode happy --save part3_recovery.json
+
+# merge the three phases into one file, in order
+python -c "
+import json
+parts = ['part1_normal.json', 'part2_fault.json', 'part3_recovery.json']
+merged = []
+for p in parts:
+    with open(p) as f:
+        merged.extend(json.load(f))
+with open('demo_sag.json', 'w') as f:
+    json.dump(merged, f, indent=2)
+print(f'merged {len(merged)} readings into demo_sag.json')
+"
+```
+
+Then open the notebook and run **Cell 14** (just above the chart cell — see the instructions
+there too) followed by the chart cell itself. No need to move `demo_sag.json` anywhere: the
+chart cell already checks `edge_simulator/local/demo_sag.json` as one of its search paths
+(alongside a copy kept at `rl_model/demo_sag.json`), so a freshly captured file is picked up
+automatically. The chart is saved to `rl_model/chart_voltage_timeline.png`.
+
+The three-phase split matters — a single `--save` run with `--inject` from the start
+produces a fault-only file with no "before" segment to contrast against, which is a much
+less convincing chart than a clear normal → fault → recovery arc.
 
 ---
 
